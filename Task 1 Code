@@ -1,0 +1,88 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#include "ch.h"
+#include "hal.h"
+#include "memory_protection.h"
+#include <main.h>
+#include "leds.h"
+#include "spi_comm.h"
+#include "sensors/proximity.h"
+#include "sensors/VL53L0X/VL53L0X.h"
+#include "motors.h"
+
+messagebus_t bus;
+MUTEX_DECL(bus_lock);
+CONDVAR_DECL(bus_condvar);
+
+#define FRONT_THRESHOLD 5  // mm
+#define PROX_THRESHOLD 600  // Proximity sensor threshold 600
+#define TURN_SPEED 600  	 // Speed for turning
+#define MOVE_SPEED 800  	 // Speed for moving forward
+#define TURN_TIME 300       // amount of time for turning
+
+void turn_randomly(void) {
+    int random_turn = rand() % 2;
+    int random_time = rand() % 501; // 0 = left, 1 = right
+    if (random_turn == 0) {
+   	 left_motor_set_speed(-TURN_SPEED);
+   	 right_motor_set_speed(TURN_SPEED);
+    } else {
+   	 left_motor_set_speed(TURN_SPEED);
+   	 right_motor_set_speed(-TURN_SPEED);
+    }
+    chThdSleepMilliseconds(random_time); // Short turn duration
+}
+
+int main(void) {
+    halInit();
+    chSysInit();
+    mpu_init();
+
+    // Initialize Sensors & Motors
+    messagebus_init(&bus, &bus_lock, &bus_condvar);
+    proximity_start(0);
+    calibrate_ir();
+    VL53L0X_start();
+    clear_leds();
+    spi_comm_start();
+    motors_init();
+
+    while (1) {
+   	 int front_dist = VL53L0X_get_dist_mm();
+   	 int prox_left = get_calibrated_prox(6);
+   	 int prox_right = get_calibrated_prox(1);
+   	 int prox_front_left = get_calibrated_prox(7);
+   	 int prox_front_right = get_calibrated_prox(0);
+
+   	 // Robot Surrounded at the front
+   	 if (front_dist < FRONT_THRESHOLD && prox_front_left < PROX_THRESHOLD && prox_front_right < PROX_THRESHOLD && prox_left < PROX_THRESHOLD && prox_right < PROX_THRESHOLD) {
+   		 turn_randomly();
+   	 }
+   	 // Side obstacles detected - adjust path
+   	 else if (prox_left < PROX_THRESHOLD) {
+   		 left_motor_set_speed(TURN_SPEED);
+   		 right_motor_set_speed(-TURN_SPEED);
+   		 chThdSleepMilliseconds(TURN_TIME);
+   	 }
+   	 else if (prox_right < PROX_THRESHOLD) {
+   		 left_motor_set_speed(-TURN_SPEED);
+   		 right_motor_set_speed(TURN_SPEED);
+   		 chThdSleepMilliseconds(TURN_TIME);
+   	 }
+   	 // Default forward movement
+   	 else {
+   		 left_motor_set_speed(MOVE_SPEED);
+   		 right_motor_set_speed(MOVE_SPEED);
+   	 }
+    }
+}
+
+#define STACK_CHK_GUARD 0xe2dee396
+uintptr_t __stack_chk_guard = STACK_CHK_GUARD;
+
+void __stack_chk_fail(void) {
+    chSysHalt("Stack smashing detected");
+}
+
